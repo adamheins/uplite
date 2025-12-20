@@ -1,0 +1,22 @@
+[project]
+name = "uplite"
+version = "0.1.0"
+description = "Simple code for the robot waiter problem."
+authors = [
+  {name = "Adam Heins", email = "mail@adamheins.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "casadi>=3.7.2",
+    "numpy>=2.2.6",
+    "pin>=3.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 80
+
