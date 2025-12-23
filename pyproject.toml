@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = [
     "casadi>=3.7.2",
     "numpy>=2.2.6",
-    "pin>=3.8.0",
+    "pin[casadi]>=3.8.0",
 ]
 
 [build-system]

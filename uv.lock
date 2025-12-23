@@ -622,5 +622,5 @@ dependencies = [
 requires-dist = [
     { name = "casadi", specifier = ">=3.7.2" },
     { name = "numpy", specifier = ">=2.2.6" },
-    { name = "pin", specifier = ">=3.8.0" },
+    { name = "pin", extras = ["casadi"], specifier = ">=3.8.0" },
 ]
