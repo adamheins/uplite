@@ -188,26 +188,17 @@ def main():
     integrator = setup_integrator(model, SIM_TIMESTEP)
 
     # simulation
-    pyb.connect(pyb.GUI)
-    pyb.setGravity(0, 0, -9.81)
-    pyb.setTimeStep(SIM_TIMESTEP)
-    pyb.setAdditionalSearchPath(pybullet_data.getDataPath())
-    pyb.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
+    sim = uplite.BulletSimulation(URDF_PATH, tool_link_name="tray", timestep=SIM_TIMESTEP, q0=q0)
 
-    robot_id = pyb.loadURDF(
-        URDF_PATH.as_posix(),
-        [0, 0, 1],
-        useFixedBase=True,
+    # add a transported object
+    params = uplite.InertialParameters(
+        mass=1.0,
+        com=[0, 0, 0.1],
+        inertia=np.diag([0.01, 0.01, 0.01]),
     )
-    # TODO: name collision
-    robot = pyb_utils.Robot(robot_id, tool_link_name="tool0")
-    robot.reset_joint_configuration(q0)
+    sim.add_transported_box(params=params, mu=0.5, rx=0.05, ry=0.05)
 
-    # get solution
-    for i in range(TOTAL_STEPS):
-        simX[i, :] = ocp_solver.get(i, "x")
-        simU[i, :] = ocp_solver.get(i, "u")
-    simX[TOTAL_STEPS, :] = ocp_solver.get(TOTAL_STEPS, "x")
+    box = uplite.TransportedObject.box(params=params, mu=0.5, rx=0.05, ry=0.05)
 
     kp = 10
     xd = x0.copy()
@@ -222,10 +213,10 @@ def main():
         xd = integrator.simulate(x=xd, u=u)
         qd, vd = xd[:nq], xd[nq:]
 
-        q, v = robot.get_joint_states()
-        r = robot.get_link_frame_pose()[0]
+        q, v = sim.robot.get_joint_states()
+        r = sim.robot.get_link_frame_pose()[0]
         v_cmd = kp * (qd - q) + vd
-        robot.command_velocity(v_cmd)
+        # robot.command_velocity(v_cmd)
 
         ts.append(t)
         rs.append(r)
