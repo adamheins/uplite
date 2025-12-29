@@ -3,6 +3,9 @@
   <material name="red">
     <color rgba="1 0 0 1"/>
   </material>
+  <material name="black">
+    <color rgba="0 0 0 1"/>
+  </material>
   <!--
     Base UR robot series xacro macro.
 
@@ -66,13 +69,13 @@
     <visual>
       <origin rpy="0.0 0.0 3.141592653589793" xyz="0.0 0.0 0.0"/>
       <geometry>
-        <mesh filename="file://urdf_assets/base.dae"/>
+        <mesh filename="file://meshes/base.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="0.0 0.0 3.141592653589793" xyz="0.0 0.0 0.0"/>
       <geometry>
-        <mesh filename="file://urdf_assets/base.stl"/>
+        <mesh filename="file://meshes/base.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -85,13 +88,13 @@
     <visual>
       <origin rpy="0.0 0.0 3.141592653589793" xyz="0.0 0.0 0.0"/>
       <geometry>
-        <mesh filename="file://urdf_assets/shoulder.dae"/>
+        <mesh filename="file://meshes/shoulder.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="0.0 0.0 3.141592653589793" xyz="0.0 0.0 0.0"/>
       <geometry>
-        <mesh filename="file://urdf_assets/shoulder.stl"/>
+        <mesh filename="file://meshes/shoulder.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -104,13 +107,13 @@
     <visual>
       <origin rpy="1.5707963267948966 0.0 -1.5707963267948966" xyz="0.0 0.0 0.138"/>
       <geometry>
-        <mesh filename="file://urdf_assets/upperarm.dae"/>
+        <mesh filename="file://meshes/upperarm.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0.0 -1.5707963267948966" xyz="0.0 0.0 0.138"/>
       <geometry>
-        <mesh filename="file://urdf_assets/upperarm.stl"/>
+        <mesh filename="file://meshes/upperarm.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -123,13 +126,13 @@
     <visual>
       <origin rpy="1.5707963267948966 0.0 -1.5707963267948966" xyz="0.0 0.0 0.007"/>
       <geometry>
-        <mesh filename="file://urdf_assets/forearm.dae"/>
+        <mesh filename="file://meshes/forearm.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0.0 -1.5707963267948966" xyz="0.0 0.0 0.007"/>
       <geometry>
-        <mesh filename="file://urdf_assets/forearm.stl"/>
+        <mesh filename="file://meshes/forearm.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -142,13 +145,13 @@
     <visual>
       <origin rpy="1.5707963267948966 0.0 0.0" xyz="0.0 0.0 -0.127"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist1.dae"/>
+        <mesh filename="file://meshes/wrist1.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0.0 0.0" xyz="0.0 0.0 -0.127"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist1.stl"/>
+        <mesh filename="file://meshes/wrist1.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -161,13 +164,13 @@
     <visual>
       <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.0997"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist2.dae"/>
+        <mesh filename="file://meshes/wrist2.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.0997"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist2.stl"/>
+        <mesh filename="file://meshes/wrist2.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -180,13 +183,13 @@
     <visual>
       <origin rpy="1.5707963267948966 0.0 0.0" xyz="0.0 0.0 -0.0989"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist3.dae"/>
+        <mesh filename="file://meshes/wrist3.dae"/>
       </geometry>
     </visual>
     <collision>
       <origin rpy="1.5707963267948966 0.0 0.0" xyz="0.0 0.0 -0.0989"/>
       <geometry>
-        <mesh filename="file://urdf_assets/wrist3.stl"/>
+        <mesh filename="file://meshes/wrist3.stl"/>
       </geometry>
     </collision>
     <inertial>
@@ -293,4 +296,35 @@
     <parent link="flange"/>
     <child link="tool0"/>
   </joint>
+
+  <joint name="tool_tray_joint" type="fixed">
+    <origin rpy="1.5707963267948966 0 0" xyz="0.0 0.0 0.25"/>
+    <parent link="tool0"/>
+    <child link="tray"/>
+  </joint>
+
+  <!-- Tray is rigidly attached to the robot as if gripped. -->
+  <link name="tray">
+    <visual>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.02" radius="0.15"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+
+    <collision>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <geometry>
+        <cylinder length="0.02" radius="0.15"/>
+      </geometry>
+    </collision>
+
+    <inertial>
+      <origin rpy="0 0 0" xyz="0 0 0"/>
+      <mass value="0.1"/>
+      <!-- not accurate, but pybullet recomputes this by default -->
+      <inertia ixx="1" ixy="0" ixz="0" iyy="1" iyz="0" izz="1"/>
+    </inertial>
+  </link>
 </robot>

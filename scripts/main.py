@@ -17,6 +17,8 @@ import pybullet as pyb
 import pybullet_data
 import pyb_utils
 
+import uplite
+
 
 STEPS_PER_SECOND = 10
 HORIZON = 5
@@ -24,9 +26,10 @@ TOTAL_STEPS = STEPS_PER_SECOND * HORIZON
 
 SIM_TIMESTEP = 0.01
 
+URDF_PATH = uplite.ASSETS_DIR / "combined.urdf"
+ROBOT_HOME = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 4, np.pi / 2, 0])
+
 # TODO
-# * better plotting
-# * add a simulator
 # * add sticking constraints
 
 
@@ -103,7 +106,7 @@ class CasadiRobotModel:
 
 
 def main():
-    robot = CasadiRobotModel(urdf_path="ur5e/ur5e.urdf", ee_name="tool0")
+    robot = CasadiRobotModel(urdf_path=URDF_PATH, ee_name="tool0")
     model = robot.make_acados_model()
 
     name = "robot_ocp"
@@ -131,7 +134,7 @@ def main():
     robot.forward(model.x, model.u)
     ee_pos = robot.ee_pose()[0]
 
-    q0 = np.zeros(nq)
+    q0 = ROBOT_HOME
     v0 = np.zeros(nv)
     u0 = np.zeros(nu)
     x0 = np.concatenate((q0, v0))
@@ -192,7 +195,7 @@ def main():
     pyb.loadURDF("plane.urdf", [0, 0, 0], useFixedBase=True)
 
     robot_id = pyb.loadURDF(
-        "/ur5e/ur5e.urdf",
+        URDF_PATH.as_posix(),
         [0, 0, 1],
         useFixedBase=True,
     )
@@ -221,7 +224,6 @@ def main():
 
         q, v = robot.get_joint_states()
         r = robot.get_link_frame_pose()[0]
-        print(r)
         v_cmd = kp * (qd - q) + vd
         robot.command_velocity(v_cmd)
 
