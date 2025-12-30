@@ -24,6 +24,8 @@ class BulletSimulation:
             useFixedBase=True,
         )
         self.robot = pyb_utils.Robot(robot_id, tool_link_name=tool_link_name)
+        self.timestep = timestep
+        self.steps = 0
 
         # pybullet uses multiplicative friction model, such that each contact
         # point's friction coefficient is the product of that of each object.
@@ -39,6 +41,11 @@ class BulletSimulation:
             obj_uid=robot_id,
             link_index=self.robot.tool_idx,
         )
+
+    def step(self):
+        pyb.stepSimulation()
+        self.steps += 1
+        return self.steps * self.timestep
 
     def add_transported_box(self, params, mu, rx, ry, color=(1, 0, 0, 1)):
         p, R = self.robot.get_link_frame_pose(as_rotation_matrix=True)

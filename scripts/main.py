@@ -13,9 +13,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pinocchio as pin
 from pinocchio import casadi as cpin
-import pybullet as pyb
-import pybullet_data
-import pyb_utils
 
 import uplite
 
@@ -28,6 +25,7 @@ SIM_TIMESTEP = 0.01
 
 URDF_PATH = uplite.ASSETS_DIR / "combined.urdf"
 ROBOT_HOME = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 4, np.pi / 2, 0])
+TARGET_POSITION = np.array([-0.5, 0.0, 0.5])  # desired end-effector position
 
 # TODO
 # * add sticking constraints
@@ -37,10 +35,10 @@ def setup_integrator(model, dt, steps=1):
     """Setup acados integrator for given model and time step."""
     sim = AcadosSim()
     sim.model = model
-
     sim.solver_options.T = dt  # simulation time
     sim.solver_options.num_steps = steps
-    sim.code_export_directory = "c_generated_code_sim"
+    sim.code_export_directory = "acados/c_generated_code_sim"
+    sim.json_file = "acados/sim.json"
     return AcadosSimSolver(sim)
 
 
@@ -56,139 +54,42 @@ def get_solution_at_time(t, horizon, steps, solver):
     return idx * dt, x, u
 
 
-class CasadiRobotModel:
-    def __init__(self, urdf_path, ee_name):
-        model = pin.buildModelFromUrdf(urdf_path)
-        self.model = cpin.Model(model)
-        self.data = self.model.createData()
+class RobotModel:
+    def __init__(self, model, ee_name, pin=pin):
+        self.model = model
+        self.data = model.createData()
 
         assert self.model.existFrame(ee_name)
         self.ee_idx = self.model.getFrameId(ee_name)
+        self.ee_name = ee_name
+
+        self._pin = pin
+
+    @classmethod
+    def from_urdf_file(cls, urdf_path, ee_name):
+        model = pin.buildModelFromUrdf(urdf_path)
+        return cls(model=model, ee_name=ee_name)
+
+    def casadi(self):
+        """Convert the model to CasADi format."""
+        model = cpin.Model(self.model)
+        return RobotModel(model=model, ee_name=self.ee_name, pin=cpin)
 
     def forward(self, x, u):
-        cpin.forwardKinematics(self.model, self.data, x[:6], x[6:], u)
-        cpin.updateFramePlacements(self.model, self.data)
+        q, v = x[: self.model.nq], x[self.model.nq :]
+        self._pin.forwardKinematics(self.model, self.data, q, v, u)
+        self._pin.updateFramePlacements(self.model, self.data)
 
-    def ee_pose(self):
+    def pose(self):
         oMf = self.data.oMf[self.ee_idx]
         return oMf.translation, oMf.rotation
 
     # TODO we also need EE velocity and acceleration
 
-    def make_acados_model(self, jerk_input=False, name="robot"):
-        nx = self.model.nq + self.model.nv
-        q = SX.sym("q", self.model.nq)
-        v = SX.sym("v", self.model.nv)
-        u = SX.sym("u", self.model.nv)
-
-        x = vertcat(q, v)
-        xdot = SX.sym("xdot", x.size1())
-
-        f_expl = vertcat(v, u)
-        f_impl = xdot - f_expl
-
-        model = AcadosModel()
-
-        model.f_impl_expr = f_impl
-        model.f_expl_expr = f_expl
-        model.x = x
-        model.xdot = xdot
-        model.u = u
-        model.name = name
-
-        model.x_labels = [f"q_{i}" for i in range(self.model.nq)] + [
-            f"v_{i}" for i in range(self.model.nv)
-        ]
-        model.u_labels = [f"u_{i}" for i in range(self.model.nv)]
-        model.t_label = "Time [s]"
-
-        return model
-
 
 def main():
-    robot = CasadiRobotModel(urdf_path=URDF_PATH, ee_name="tool0")
-    model = robot.make_acados_model()
-
-    name = "robot_ocp"
-    ocp = AcadosOcp()
-    ocp.model = model
-    ocp.name = name
-    ocp.json_file = f"{name}.json"
-    ocp.code_export_directory = f"c_generated_code_{name}"
-
+    robot = RobotModel.from_urdf_file(urdf_path=URDF_PATH, ee_name="tray")
     nq = robot.model.nq
-    nv = robot.model.nv
-    nx = model.x.rows()
-    nu = model.u.rows()
-
-    # set prediction horizon
-    ocp.solver_options.N_horizon = TOTAL_STEPS
-    ocp.solver_options.tf = HORIZON
-
-    # cost matrices
-    # TODO: split up Q
-    Q = np.diag(np.concatenate((np.ones(3), 0 * np.ones(6), 0.1 * np.ones(6))))
-    R = 0.01 * np.eye(nu)
-
-    rd = np.array([0.5, 0.0, 0.5])  # desired end-effector position
-    robot.forward(model.x, model.u)
-    ee_pos = robot.ee_pose()[0]
-
-    q0 = ROBOT_HOME
-    v0 = np.zeros(nv)
-    u0 = np.zeros(nu)
-    x0 = np.concatenate((q0, v0))
-
-    # path cost
-    ocp.cost.cost_type = "NONLINEAR_LS"
-    ocp.model.cost_y_expr = vertcat(ee_pos, model.x, model.u)
-    ocp.cost.yref = np.concatenate((rd, x0, u0))
-    ocp.cost.W = diagcat(Q, R).full()
-
-    # terminal cost
-    ocp.cost.cost_type_e = "NONLINEAR_LS"
-    ocp.model.cost_y_expr_e = vertcat(ee_pos, model.x)
-    ocp.cost.yref_e = np.concatenate((rd, x0))
-    ocp.cost.W_e = Q
-
-    # input limits
-    ocp.constraints.lbu = -10 * np.ones(nu)
-    ocp.constraints.ubu = 10 * np.ones(nu)
-    ocp.constraints.idxbu = np.arange(nu)
-
-    # state limits
-    # ocp.constraints.lbx = np.array([-Y_MAX, -Z_MAX, -V_MAX, -V_MAX])
-    # ocp.constraints.ubx = np.array([Y_MAX, Z_MAX, V_MAX, V_MAX])
-    # ocp.constraints.idxbx = np.array([0, 1, 3, 4])
-
-    # initial state
-    ocp.constraints.x0 = x0
-
-    # set options
-    ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
-    ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
-    ocp.solver_options.integrator_type = "IRK"  # IRK, ERK
-    ocp.solver_options.nlp_solver_type = "SQP"
-    ocp.solver_options.globalization = "MERIT_BACKTRACKING"
-    ocp.solver_options.nlp_solver_max_iter = 2000
-    ocp.solver_options.qp_solver_iter_max = 2000
-    ocp.solver_options.qp_tol = 1e-6
-
-    ocp_solver = AcadosOcpSolver(ocp)
-
-    simX = np.zeros((TOTAL_STEPS + 1, nx))
-    simU = np.zeros((TOTAL_STEPS, nu))
-
-    status = ocp_solver.solve()
-    ocp_solver.print_statistics()  # encapsulates: stat = ocp_solver.get_stats("statistics")
-
-    if status != 0:
-        raise Exception(f"acados returned status {status}.")
-
-    integrator = setup_integrator(model, SIM_TIMESTEP)
-
-    # simulation
-    sim = uplite.BulletSimulation(URDF_PATH, tool_link_name="tray", timestep=SIM_TIMESTEP, q0=q0)
 
     # add a transported object
     params = uplite.InertialParameters(
@@ -196,9 +97,22 @@ def main():
         com=[0, 0, 0.1],
         inertia=np.diag([0.01, 0.01, 0.01]),
     )
+    box = uplite.TransportedObject.box(params=params, mu=0.5, rx=0.05, ry=0.05)
+
+    # plan trajectory
+    planner = uplite.Planner(robot=robot, horizon=HORIZON, steps_per_second=STEPS_PER_SECOND)
+    status = planner.solve()
+    if status != 0:
+        raise Exception(f"acados returned status {status}.")
+
+    # simulation
+    sim = uplite.BulletSimulation(
+        URDF_PATH, tool_link_name="tray", timestep=SIM_TIMESTEP, q0=q0
+    )
     sim.add_transported_box(params=params, mu=0.5, rx=0.05, ry=0.05)
 
-    box = uplite.TransportedObject.box(params=params, mu=0.5, rx=0.05, ry=0.05)
+    # rollout trajectory solution at simulated frequency
+    xds, us = ocp.rollout(dt=sim.timestep)
 
     kp = 10
     xd = x0.copy()
@@ -207,24 +121,22 @@ def main():
     rs = []
 
     t = 0
-    i = 0
     while t < HORIZON:
-        _, _, u = get_solution_at_time(t, HORIZON, TOTAL_STEPS, ocp_solver)
-        xd = integrator.simulate(x=xd, u=u)
+        # _, _, u = get_solution_at_time(t, HORIZON, TOTAL_STEPS, ocp_solver)
+        # xd = integrator.simulate(x=xd, u=u)
+        xd = xds[sim.steps]
         qd, vd = xd[:nq], xd[nq:]
 
         q, v = sim.robot.get_joint_states()
         r = sim.robot.get_link_frame_pose()[0]
         v_cmd = kp * (qd - q) + vd
-        # robot.command_velocity(v_cmd)
+        sim.robot.command_velocity(v_cmd)
 
         ts.append(t)
         rs.append(r)
 
-        pyb.stepSimulation()
-        i += 1
-        t = i * SIM_TIMESTEP
-        time.sleep(SIM_TIMESTEP)
+        t = sim.step()
+        time.sleep(sim.timestep)
 
     rs = np.array(rs)
 
