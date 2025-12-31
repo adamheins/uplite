@@ -20,6 +20,9 @@ TARGET_POSITION = np.array([-0.5, 0.0, 0.5])  # desired end-effector position
 
 # TODO
 # * add sticking constraints
+# * can start with a basic upright constraint
+
+# (a - R @ g) @ z = 0
 
 
 class RobotModel:
@@ -56,7 +59,23 @@ class RobotModel:
         oMf = self.data.oMf[self.ee_idx]
         return oMf.translation, oMf.rotation
 
-    # TODO we also need EE velocity and acceleration
+    def velocity(self):
+        v = self._pin.getFrameVelocity(
+            self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
+        )
+        return v.linear, v.angular
+
+    def spatial_acceleration(self):
+        a = self._pin.getFrameAcceleration(
+            self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
+        )
+        return a.linear, a.angular
+
+    def classical_acceleration(self):
+        a = self._pin.getFrameClassicalAcceleration(
+            self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
+        )
+        return a.linear, a.angular
 
 
 def main():
@@ -84,7 +103,7 @@ def main():
         q0=ROBOT_HOME,
         rd=rd,
     )
-    status = planner.solve()
+    status = planner.solve(verbose=True)
     if status != 0:
         raise Exception(f"acados returned status {status}.")
 
