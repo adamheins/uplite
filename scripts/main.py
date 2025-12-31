@@ -1,14 +1,5 @@
 import time
 
-from acados_template import (
-    AcadosModel,
-    AcadosOcp,
-    AcadosOcpSolver,
-    AcadosSim,
-    AcadosSimSolver,
-    plot_trajectories,
-)
-from casadi import SX, vertcat, sin, cos, Function, diagcat
 import matplotlib.pyplot as plt
 import numpy as np
 import pinocchio as pin
@@ -31,29 +22,6 @@ TARGET_POSITION = np.array([-0.5, 0.0, 0.5])  # desired end-effector position
 # * add sticking constraints
 
 
-def setup_integrator(model, dt, steps=1):
-    """Setup acados integrator for given model and time step."""
-    sim = AcadosSim()
-    sim.model = model
-    sim.solver_options.T = dt  # simulation time
-    sim.solver_options.num_steps = steps
-    sim.code_export_directory = "acados/c_generated_code_sim"
-    sim.json_file = "acados/sim.json"
-    return AcadosSimSolver(sim)
-
-
-def get_solution_at_time(t, horizon, steps, solver):
-    if t < 0 or t > horizon:
-        raise Exception("time out of bounds")
-    dt = horizon / steps
-    idx = int(t / dt)
-    if idx >= steps:
-        idx = steps - 1
-    x = solver.get(idx, "x")
-    u = solver.get(idx, "u")
-    return idx * dt, x, u
-
-
 class RobotModel:
     def __init__(self, model, ee_name, pin=pin):
         self.model = model
@@ -63,6 +31,8 @@ class RobotModel:
         self.ee_idx = self.model.getFrameId(ee_name)
         self.ee_name = ee_name
 
+        # store internal reference to pinocchio so we can use either the
+        # regular or casadi version
         self._pin = pin
 
     @classmethod
@@ -75,8 +45,10 @@ class RobotModel:
         model = cpin.Model(self.model)
         return RobotModel(model=model, ee_name=self.ee_name, pin=cpin)
 
-    def forward(self, x, u):
+    def forward(self, x, u=None):
         q, v = x[: self.model.nq], x[self.model.nq :]
+        if u is None:
+            u = np.zeros(self.model.nv)
         self._pin.forwardKinematics(self.model, self.data, q, v, u)
         self._pin.updateFramePlacements(self.model, self.data)
 
@@ -90,6 +62,7 @@ class RobotModel:
 def main():
     robot = RobotModel.from_urdf_file(urdf_path=URDF_PATH, ee_name="tray")
     nq = robot.model.nq
+    nv = robot.model.nv
 
     # add a transported object
     params = uplite.InertialParameters(
@@ -100,38 +73,47 @@ def main():
     box = uplite.TransportedObject.box(params=params, mu=0.5, rx=0.05, ry=0.05)
 
     # plan trajectory
-    planner = uplite.Planner(robot=robot, horizon=HORIZON, steps_per_second=STEPS_PER_SECOND)
+    # TODO the API should eventually allow separate RTI settings
+    robot.forward(x=np.concatenate((ROBOT_HOME, np.zeros(nv))))
+    r0 = robot.pose()[0]
+    rd = r0 + TARGET_POSITION
+    planner = uplite.Planner(
+        robot=robot,
+        horizon=HORIZON,
+        steps_per_second=STEPS_PER_SECOND,
+        q0=ROBOT_HOME,
+        rd=rd,
+    )
     status = planner.solve()
     if status != 0:
         raise Exception(f"acados returned status {status}.")
 
     # simulation
     sim = uplite.BulletSimulation(
-        URDF_PATH, tool_link_name="tray", timestep=SIM_TIMESTEP, q0=q0
+        URDF_PATH, tool_link_name="tray", timestep=SIM_TIMESTEP, q0=ROBOT_HOME
     )
     sim.add_transported_box(params=params, mu=0.5, rx=0.05, ry=0.05)
 
     # rollout trajectory solution at simulated frequency
-    xds, us = ocp.rollout(dt=sim.timestep)
+    xds, us = planner.rollout(dt=sim.timestep)
 
     kp = 10
-    xd = x0.copy()
 
     ts = []
     rs = []
 
     t = 0
     while t < HORIZON:
-        # _, _, u = get_solution_at_time(t, HORIZON, TOTAL_STEPS, ocp_solver)
-        # xd = integrator.simulate(x=xd, u=u)
+
+        # track desired trajectory
         xd = xds[sim.steps]
         qd, vd = xd[:nq], xd[nq:]
-
         q, v = sim.robot.get_joint_states()
-        r = sim.robot.get_link_frame_pose()[0]
         v_cmd = kp * (qd - q) + vd
         sim.robot.command_velocity(v_cmd)
 
+        # record
+        r = sim.robot.get_link_frame_pose()[0]
         ts.append(t)
         rs.append(r)
 
