@@ -25,6 +25,7 @@ TARGET_POSITION = np.array([-0.5, 0.0, 0.5])  # desired end-effector position
 # (a - R @ g) @ z = 0
 
 
+# TODO rename to RobotKinematics
 class RobotModel:
     def __init__(self, model, ee_name, pin=pin):
         self.model = model
@@ -48,6 +49,8 @@ class RobotModel:
         model = cpin.Model(self.model)
         return RobotModel(model=model, ee_name=self.ee_name, pin=cpin)
 
+    # TODO I think it would be better to avoid depending on a particular state
+    # representation here
     def forward(self, x, u=None):
         q, v = x[: self.model.nq], x[self.model.nq :]
         if u is None:
@@ -59,23 +62,23 @@ class RobotModel:
         oMf = self.data.oMf[self.ee_idx]
         return oMf.translation, oMf.rotation
 
-    def velocity(self):
+    def spatial_velocity(self):
         v = self._pin.getFrameVelocity(
             self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
         )
-        return v.linear, v.angular
+        return v.angular, v.linear
 
     def spatial_acceleration(self):
         a = self._pin.getFrameAcceleration(
             self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
         )
-        return a.linear, a.angular
+        return a.angular, a.linear
 
     def classical_acceleration(self):
         a = self._pin.getFrameClassicalAcceleration(
             self.model, self.data, self.ee_idx, pin.ReferenceFrame.LOCAL
         )
-        return a.linear, a.angular
+        return a.angular, a.linear
 
 
 def main():
@@ -89,7 +92,7 @@ def main():
         com=[0, 0, 0.1],
         inertia=np.diag([0.01, 0.01, 0.01]),
     )
-    box = uplite.TransportedObject.box(params=params, mu=0.5, rx=0.05, ry=0.05)
+    box = uplite.TransportedObject.box(params=params, rx=0.05, ry=0.05)
 
     # plan trajectory
     # TODO the API should eventually allow separate RTI settings
@@ -102,6 +105,8 @@ def main():
         steps_per_second=STEPS_PER_SECOND,
         q0=ROBOT_HOME,
         rd=rd,
+        params=box.params,
+        contacts=box.contacts,
     )
     status = planner.solve(verbose=True)
     if status != 0:

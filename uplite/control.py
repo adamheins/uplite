@@ -4,21 +4,28 @@ from acados_template import (
     AcadosOcpSolver,
     AcadosSim,
     AcadosSimSolver,
+    ACADOS_INFTY,
 )
 import casadi as ca
 import numpy as np
 
+from .transport import adjoint, contact_jacobian
 
-def _make_model(robot, jerk_input=False):
-    nx = robot.model.nq + robot.model.nv
+
+def _make_model(robot, nf=0):
+    # state
     q = ca.SX.sym("q", robot.model.nq)
     v = ca.SX.sym("v", robot.model.nv)
-    u = ca.SX.sym("u", robot.model.nv)
-
     x = ca.vertcat(q, v)
     xdot = ca.SX.sym("xdot", x.size1())
 
-    f_expl = ca.vertcat(v, u)
+    # input
+    a = ca.SX.sym("v", robot.model.nv)
+    f = ca.SX.sym("f", nf)
+    u = ca.vertcat(a, f)
+
+    # dynamics
+    f_expl = ca.vertcat(v, a)
     f_impl = xdot - f_expl
 
     model = AcadosModel()
@@ -31,7 +38,7 @@ def _make_model(robot, jerk_input=False):
     return model
 
 
-def _make_solver(robot, model, horizon, total_steps, q0, rd):
+def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contacts=None):
     ocp = AcadosOcp()
     ocp.model = model
     ocp.name = "robot_ocp"
@@ -41,7 +48,13 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd):
     nq = robot.model.nq
     nv = robot.model.nv
     nx = model.x.rows()
+
+    na = nv
     nu = model.u.rows()
+
+    if contacts is None:
+        contacts = []
+    nf = len(contacts)
 
     # set prediction horizon
     ocp.solver_options.N_horizon = total_steps
@@ -54,7 +67,7 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd):
     Q = ca.diagcat(Qr, Qq, Qv).full()
     R = 0.01 * np.eye(nu)
 
-    robot.forward(model.x, model.u)
+    robot.forward(model.x, model.u[:na])
     r, C = robot.pose()
 
     v0 = np.zeros(nv)
@@ -73,9 +86,12 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd):
     ocp.cost.yref_e = np.concatenate((rd, x0))
     ocp.cost.W_e = Q
 
-    # input limits
-    ocp.constraints.lbu = -10 * np.ones(nu)
-    ocp.constraints.ubu = 10 * np.ones(nu)
+    # input and force limits
+    a_max = 10
+    ocp.constraints.lbu = np.concatenate((-a_max * np.ones(na), np.zeros(nf)))
+    ocp.constraints.ubu = np.concatenate(
+        (a_max * np.ones(na), ACADOS_INFTY * np.ones(nf))
+    )
     ocp.constraints.idxbu = np.arange(nu)
 
     # state limits
@@ -84,17 +100,45 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd):
     # ocp.constraints.idxbx = np.array([0, 1, 3, 4])
 
     # aligned constraint
-    a = robot.classical_acceleration()[0]
-    z = np.array([0, 0, 1])
-    g = 9.81 * z
-    con = ca.cross(z, a + C @ g)
-
-    ocp.model.con_h_expr = con
-    ocp.constraints.lh = np.zeros(3)
-    ocp.constraints.uh = np.zeros(3)
+    # a = robot.classical_acceleration()[0]
+    # z = np.array([0, 0, 1])
+    # g = 9.81 * z
+    # con = ca.cross(z, a + C @ g)
+    # ocp.model.con_h_expr = con
+    # ocp.constraints.lh = np.zeros(3)
+    # ocp.constraints.uh = np.zeros(3)
 
     # initial state
     ocp.constraints.x0 = x0
+
+    # rigid body dynamics sticking constraint
+    if nf > 0:
+        # contact wrench
+        wc = np.zeros(6)
+        for i in range(nf):
+            # assume all normals are vertical
+            force = model.u[na + i] * np.array([0, 0, 1])
+
+            wc += contact_jacobian(contacts[i, :]).T @ force
+
+        # assume all normals are vertical
+        # normal_forces = model.u[na:]
+        # normals = [np.array([0, 0, 1]) for _ in range(nf)]
+        # forces = [f * n for f, n in zip(normal_forces, normals)]
+        #
+        # wc = np.sum([contact_jacobian(c).T @ f for c, f in zip(contacts, forces)])
+
+        # spatial gravity in body frame
+        g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -9.81]))
+
+        # Newton-Euler equation for rigid body dynamics
+        ξ = ca.vertcat(*robot.spatial_velocity())
+        dξdt = ca.vertcat(*robot.spatial_acceleration())
+        M = params.M
+        V = adjoint(ξ)
+        ocp.model.con_h_expr = M @ (dξdt - g) - V.T @ M @ ξ - wc
+        ocp.constraints.lh = np.zeros(6)
+        ocp.constraints.uh = np.zeros(6)
 
     # set solver options
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
@@ -117,24 +161,15 @@ def _make_integrator(model, dt, int_steps=1):
     return AcadosSimSolver(sim, json_file="acados/sim.json")
 
 
-# TODO: make part of class
-def _get_input_at_time(t, horizon, steps, solver):
-    if t < 0 or t > horizon:
-        raise ValueError("time out of bounds")
-    dt = horizon / steps
-    idx = int(t / dt)
-    if idx >= steps:
-        idx = steps - 1
-    return solver.get(idx, "u")
-
-
 class Planner:
-    def __init__(self, robot, horizon, steps_per_second, q0, rd):
+    def __init__(self, robot, horizon, steps_per_second, q0, rd, params=None, contacts=None):
         self.horizon = horizon
         self.total_steps = int(horizon * steps_per_second)
+        self.dt = self.horizon / self.total_steps
 
         crobot = robot.casadi()
-        self.model = _make_model(crobot)
+        nf = 0 if contacts is None else len(contacts)
+        self.model = _make_model(crobot, nf=nf)
         self.solver = _make_solver(
             robot=crobot,
             model=self.model,
@@ -142,6 +177,8 @@ class Planner:
             total_steps=self.total_steps,
             q0=q0,
             rd=rd,
+            params=params,
+            contacts=contacts,
         )
 
     def solve(self, verbose=False):
@@ -149,6 +186,14 @@ class Planner:
         if verbose:
             self.solver.print_statistics()
         return status
+
+    def _get_input_at_time(self, t):
+        if t < 0 or t > self.horizon:
+            raise ValueError("time out of bounds")
+        idx = int(t / self.dt)
+        if idx >= self.total_steps:
+            idx = self.total_steps - 1
+        return self.solver.get(idx, "u")
 
     def rollout(self, dt, int_steps=1):
         integrator = _make_integrator(self.model, dt=dt, int_steps=int_steps)
@@ -160,7 +205,7 @@ class Planner:
         i = 0
         t = 0
         while t <= self.horizon:
-            u = _get_input_at_time(t, self.horizon, self.total_steps, self.solver)
+            u = self._get_input_at_time(t)
             xd = integrator.simulate(x=xd, u=u)
             xds.append(xd)
             us.append(u)
