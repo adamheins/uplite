@@ -21,10 +21,16 @@ def contact_jacobian(c):
 
 
 class InertialParameters:
-    def __init__(self, mass, com, inertia):
+    def __init__(self, mass, com, inertia, inertia_about_com=False):
         self.mass = mass
         self.com = np.array(com)
         self.inertia = np.array(inertia)
+
+        # use parallel axis theorem to convert inertia about CoM to inertia
+        # about origin
+        if inertia_about_com:
+            C = skew(self.com)
+            self.inertia = self.inertia - self.mass * C @ C
 
         assert self.mass > 0, "Mass must be positive."
         assert self.com.shape == (
@@ -43,6 +49,12 @@ class InertialParameters:
         """Spatial mass matrix."""
         S = self.mass * skew(self.com)
         return np.block([[self.inertia, S], [-S, self.mass * np.eye(3)]])
+
+    def ne(self, ξ, dξdt):
+        """Compute the Newton-Euler equations."""
+        M = self.M
+        V = adjoint(ξ)
+        return M @ dξdt - V.T @ M @ ξ
 
 
 # class ContactPoint:

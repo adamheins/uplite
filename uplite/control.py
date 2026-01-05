@@ -8,6 +8,7 @@ from acados_template import (
 )
 import casadi as ca
 import numpy as np
+from scipy.interpolate import CubicSpline
 
 from .transport import adjoint, contact_jacobian
 
@@ -16,16 +17,18 @@ def _make_model(robot, nf=0):
     # state
     q = ca.SX.sym("q", robot.model.nq)
     v = ca.SX.sym("v", robot.model.nv)
-    x = ca.vertcat(q, v)
+    a = ca.SX.sym("a", robot.model.nv)
+
+    x = ca.vertcat(q, v, a)
     xdot = ca.SX.sym("xdot", x.size1())
 
     # input
-    a = ca.SX.sym("v", robot.model.nv)
+    j = ca.SX.sym("j", robot.model.nv)
     f = ca.SX.sym("f", nf)
-    u = ca.vertcat(a, f)
+    u = ca.vertcat(j, f)
 
     # dynamics
-    f_expl = ca.vertcat(v, a)
+    f_expl = ca.vertcat(v, a, j)
     f_impl = xdot - f_expl
 
     model = AcadosModel()
@@ -38,7 +41,16 @@ def _make_model(robot, nf=0):
     return model
 
 
-def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contacts=None):
+def _split_x(x, nq, nv):
+    q = x[:nq]
+    v = x[nq : nq + nv]
+    a = x[nq + nv :]
+    return q, v, a
+
+
+def _make_solver(
+    robot, model, horizon, total_steps, q0, rd, params=None, contacts=None
+):
     ocp = AcadosOcp()
     ocp.model = model
     ocp.name = "robot_ocp"
@@ -60,19 +72,24 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contac
     ocp.solver_options.N_horizon = total_steps
     ocp.solver_options.tf = horizon
 
+    # initial state and input
+    v0 = np.zeros(nv)
+    a0 = np.zeros(nv)
+    x0 = np.concatenate((q0, v0, a0))
+    u0 = np.zeros(nu)
+
     # cost matrices
     Qr = np.eye(3)
     Qq = 0 * np.eye(nq)
     Qv = 0.1 * np.eye(nv)
-    Q = ca.diagcat(Qr, Qq, Qv).full()
-    R = 0.01 * np.eye(nu)
+    Qa = 0.01 * np.eye(nv)
+    Q = ca.diagcat(Qr, Qq, Qv, Qa).full()
+    R = 0.001 * np.eye(nu)
 
-    robot.forward(model.x, model.u[:na])
+    # casadi forward kinematics
+    q, v, a = _split_x(model.x, nq, nv)
+    robot.forward(q=q, v=v, a=a)
     r, C = robot.pose()
-
-    v0 = np.zeros(nv)
-    u0 = np.zeros(nu)
-    x0 = np.concatenate((q0, v0))
 
     # path cost
     ocp.cost.cost_type = "NONLINEAR_LS"
@@ -81,16 +98,16 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contac
     ocp.cost.W = ca.diagcat(Q, R).full()
 
     # terminal cost
-    ocp.cost.cost_type_e = "NONLINEAR_LS"
-    ocp.model.cost_y_expr_e = ca.vertcat(r, model.x)
-    ocp.cost.yref_e = np.concatenate((rd, x0))
-    ocp.cost.W_e = Q
+    # ocp.cost.cost_type_e = "NONLINEAR_LS"
+    # ocp.model.cost_y_expr_e = ca.vertcat(r, model.x)
+    # ocp.cost.yref_e = np.concatenate((rd, x0))
+    # ocp.cost.W_e = Q
 
     # input and force limits
-    a_max = 10
-    ocp.constraints.lbu = np.concatenate((-a_max * np.ones(na), np.zeros(nf)))
+    j_max = 100
+    ocp.constraints.lbu = np.concatenate((-j_max * np.ones(nv), np.zeros(nf)))
     ocp.constraints.ubu = np.concatenate(
-        (a_max * np.ones(na), ACADOS_INFTY * np.ones(nf))
+        (j_max * np.ones(nv), ACADOS_INFTY * np.ones(nf))
     )
     ocp.constraints.idxbu = np.arange(nu)
 
@@ -117,16 +134,9 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contac
         wc = np.zeros(6)
         for i in range(nf):
             # assume all normals are vertical
-            force = model.u[na + i] * np.array([0, 0, 1])
-
-            wc += contact_jacobian(contacts[i, :]).T @ force
-
-        # assume all normals are vertical
-        # normal_forces = model.u[na:]
-        # normals = [np.array([0, 0, 1]) for _ in range(nf)]
-        # forces = [f * n for f, n in zip(normal_forces, normals)]
-        #
-        # wc = np.sum([contact_jacobian(c).T @ f for c, f in zip(contacts, forces)])
+            force = model.u[nv + i] * np.array([0, 0, 1])
+            G = contact_jacobian(contacts[i, :]).T
+            wc += G @ force
 
         # spatial gravity in body frame
         g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -9.81]))
@@ -134,15 +144,31 @@ def _make_solver(robot, model, horizon, total_steps, q0, rd, params=None, contac
         # Newton-Euler equation for rigid body dynamics
         ξ = ca.vertcat(*robot.spatial_velocity())
         dξdt = ca.vertcat(*robot.spatial_acceleration())
-        M = params.M
-        V = adjoint(ξ)
-        ocp.model.con_h_expr = M @ (dξdt - g) - V.T @ M @ ξ - wc
+        h = params.ne(ξ, dξdt - g) - wc
+
+        ocp.model.con_h_expr = h
         ocp.constraints.lh = np.zeros(6)
         ocp.constraints.uh = np.zeros(6)
+
+    # TODO: terminal constraint - this does not seem to be working
+    ocp.model.con_h_expr_e = ca.vertcat(r - rd, model.x[nq:])
+    ocp.constraints.lh_e = np.zeros(3 + 2 * nv)
+    ocp.constraints.uh_e = np.zeros(3 + 2 * nv)
+    # ocp.model.con_h_expr_e = rd - r
+    # ocp.constraints.lh_e = np.zeros(3)
+    # ocp.constraints.uh_e = np.zeros(3)
+
+    # ns = 6
+    # ocp.constraints.idxsh = np.arange(ns)
+    # ocp.cost.zl = 1 * np.ones(ns)
+    # ocp.cost.Zl = 0 * np.ones(ns)
+    # ocp.cost.zu = 1 * np.ones(ns)
+    # ocp.cost.Zu = 0 * np.ones(ns)
 
     # set solver options
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
     ocp.solver_options.hessian_approx = "GAUSS_NEWTON"
+    # ocp.solver_options.hessian_approx = "EXACT"
     ocp.solver_options.integrator_type = "IRK"
     ocp.solver_options.nlp_solver_type = "SQP"
     ocp.solver_options.globalization = "MERIT_BACKTRACKING"
@@ -162,18 +188,20 @@ def _make_integrator(model, dt, int_steps=1):
 
 
 class Planner:
-    def __init__(self, robot, horizon, steps_per_second, q0, rd, params=None, contacts=None):
+    def __init__(
+        self, robot, horizon, steps_per_second, q0, rd, params=None, contacts=None
+    ):
         self.horizon = horizon
         self.total_steps = int(horizon * steps_per_second)
-        self.dt = self.horizon / self.total_steps
+        self.dt = 1.0 / steps_per_second
 
-        crobot = robot.casadi()
+        self.crobot = robot.casadi()
         nf = 0 if contacts is None else len(contacts)
-        self.model = _make_model(crobot, nf=nf)
+        self.model = _make_model(self.crobot, nf=nf)
         self.solver = _make_solver(
-            robot=crobot,
+            robot=self.crobot,
             model=self.model,
-            horizon=horizon,
+            horizon=self.horizon,
             total_steps=self.total_steps,
             q0=q0,
             rd=rd,
@@ -187,28 +215,17 @@ class Planner:
             self.solver.print_statistics()
         return status
 
-    def _get_input_at_time(self, t):
-        if t < 0 or t > self.horizon:
-            raise ValueError("time out of bounds")
-        idx = int(t / self.dt)
-        if idx >= self.total_steps:
-            idx = self.total_steps - 1
-        return self.solver.get(idx, "u")
+    def get_solution_times(self):
+        return np.arange(self.total_steps + 1) * self.dt
 
-    def rollout(self, dt, int_steps=1):
-        integrator = _make_integrator(self.model, dt=dt, int_steps=int_steps)
+    def get_solution_states(self):
+        return np.array([self.solver.get(i, "x") for i in range(self.total_steps + 1)])
 
-        xd = self.solver.get(0, "x")
-        xds = []
-        us = []
+    def get_solution_inputs(self):
+        return np.array([self.solver.get(i, "u") for i in range(self.total_steps)])
 
-        i = 0
-        t = 0
-        while t <= self.horizon:
-            u = self._get_input_at_time(t)
-            xd = integrator.simulate(x=xd, u=u)
-            xds.append(xd)
-            us.append(u)
-            i += 1
-            t = i * dt
-        return np.array(xds), np.array(us)
+    def get_solution_spline(self):
+        ts = self.get_solution_times()
+        xs = self.get_solution_states()
+        qs = xs[:, : self.crobot.model.nq]
+        return CubicSpline(ts, qs, axis=0)
