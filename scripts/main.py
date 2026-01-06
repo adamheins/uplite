@@ -6,31 +6,37 @@ import numpy as np
 import uplite
 
 
+# planner timing
 STEPS_PER_SECOND = 10
-HORIZON = 10
+HORIZON = 5
 TOTAL_STEPS = STEPS_PER_SECOND * HORIZON
 
+# simulation timing
 SIM_TIMESTEP = 0.01
 
+# robot URDF
 URDF_PATH = uplite.ASSETS_DIR / "combined.urdf"
+
+# initial joint configuration
 ROBOT_HOME = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 4, np.pi / 2, 0])
-RELATIVE_TARGET = np.array([-0.5, 0.4, 0])  # relative EE target position
 
+# EE goal position relative to its initial position
+RELATIVE_TARGET = np.array([-0.5, 0.4, 0])
+
+# width of the (square) base of the transported box
 BASE_WIDTH = 0.1
-SIMULATED_FRICTION = 0.5  # friction coefficient in the simulation
+
+# friction coefficient in the simulation
+SIMULATED_FRICTION = 0.5
+
+# controller gain for joint position error
 P_GAIN = 10
-
-# TODO
-# * add sticking constraints
-# * can start with a basic upright constraint
-
-# (a - R @ g) @ z = 0
 
 
 def main():
     np.set_printoptions(precision=4, suppress=True)
 
-    robot = uplite.RobotKinematics.from_urdf_file(
+    kinematics = uplite.RobotKinematics.from_urdf_file(
         urdf_path=URDF_PATH, tool_link_name="tray"
     )
 
@@ -44,19 +50,18 @@ def main():
     box = uplite.TransportedObject.box(params=params, w=BASE_WIDTH)
 
     # plan trajectory
-    # TODO the API should eventually allow separate RTI settings
-    robot.forward(q=ROBOT_HOME)
-    r0 = robot.pose()[0]
+    kinematics.forward(q=ROBOT_HOME)
+    r0 = kinematics.pose()[0]
     goal = r0 + RELATIVE_TARGET
     planner = uplite.Planner(
-        robot=robot,
+        kinematics=kinematics,
         horizon=HORIZON,
         steps_per_second=STEPS_PER_SECOND,
         q0=ROBOT_HOME,
         goal=goal,
         transobj=box,
     )
-    status = planner.solve(verbose=True)
+    status = planner.plan(verbose=True)
     if status != 0:
         raise Exception(f"acados returned status {status}.")
     qspline = planner.get_solution_spline()
@@ -73,7 +78,10 @@ def main():
 
     ts = []
     rs = []
-    rds = []
+    qds = []
+    vds = []
+    qs = []
+    vs = []
 
     t = 0
     while t < HORIZON:
@@ -86,20 +94,30 @@ def main():
         sim.robot.command_velocity(v_cmd)
 
         # record
-        robot.forward(q=qd, v=vd)
-        rd = robot.pose()[0].copy()
-
         r = sim.robot.get_link_frame_pose()[0]
         ts.append(t)
         rs.append(r)
-        rds.append(rd)
-        # TODO more stuff
+        qds.append(qd)
+        vds.append(vd)
+        qs.append(q)
+        vs.append(v)
 
         t = sim.step()
         time.sleep(sim.timestep)
 
+    ts = np.array(ts)
     rs = np.array(rs)
-    rds = np.array(rds)
+    qds = np.array(qds)
+    vds = np.array(vds)
+    qs = np.array(qs)
+    vs = np.array(vs)
+
+    t_sols = planner.get_solution_times()
+    u_sols = planner.get_solution_inputs()
+    x_sols = planner.get_solution_states()
+
+    prop_cycle = plt.rcParams["axes.prop_cycle"]
+    colors = prop_cycle.by_key()["color"]
 
     plt.figure()
     plt.plot(ts, goal[0] - rs[:, 0], label="x")
@@ -112,26 +130,47 @@ def main():
     plt.legend()
 
     plt.figure()
-    plt.plot(ts, rs[:, 0], label="x", color="r")
-    plt.plot(ts, rs[:, 1], label="y", color="g")
-    plt.plot(ts, rs[:, 2], label="z", color="b")
-    plt.plot(ts, rds[:, 0], "--", label="xd", color="r")
-    plt.plot(ts, rds[:, 1], "--", label="yd", color="g")
-    plt.plot(ts, rds[:, 2] + 1, "--", label="zd", color="b")
+    for i in range(kinematics.model.nq):
+        plt.plot(ts, qs[:, i], label=f"q_{i+1}", color=colors[i])
+        plt.plot(ts, qds[:, i], "--", label=f"qd_{i+1}", color=colors[i])
+        plt.plot(t_sols, x_sols[:, i], ".", color=colors[i])
     plt.xlabel("Time [s]")
-    plt.ylabel("Position [m]")
-    plt.title("Positions")
+    plt.ylabel("Joint angles [rad]")
+    plt.title("Joint angles")
     plt.grid()
     plt.legend()
 
-    t_sols = planner.get_solution_times()[:-1]
-    u_sols = planner.get_solution_inputs()
     plt.figure()
-    for i in range(4):
-        plt.plot(t_sols, u_sols[:, 6 + i], label=f"f_{i+1}")
+    for i in range(kinematics.model.nv):
+        plt.plot(ts, vs[:, i], label=f"v_{i+1}", color=colors[i])
+        plt.plot(ts, vds[:, i], "--", label=f"vd_{i+1}", color=colors[i])
+        plt.plot(
+            t_sols, x_sols[:, kinematics.model.nq + i], ".", color=colors[i]
+        )
+    plt.xlabel("Time [s]")
+    plt.ylabel("Joint velocities [rad/s]")
+    plt.title("Joint velocities")
+    plt.grid()
+    plt.legend()
+
+    nf = u_sols.shape[1] - kinematics.model.nv
+    plt.figure()
+    for i in range(nf):
+        plt.plot(
+            t_sols[:-1], u_sols[:, kinematics.model.nv + i], label=f"f_{i+1}"
+        )
     plt.xlabel("Time [s]")
     plt.ylabel("Contact forces [N]")
     plt.title("Contact forces")
+    plt.grid()
+    plt.legend()
+
+    plt.figure()
+    for i in range(kinematics.model.nv):
+        plt.plot(t_sols[:-1], u_sols[:, i], label=f"u_{i+1}")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Jerk [rad/s^3]")
+    plt.title("Joint input jerk")
     plt.grid()
     plt.legend()
 

@@ -13,18 +13,18 @@ from scipy.interpolate import CubicSpline
 from .transport import adjoint, contact_jacobian
 
 
-def _make_model(robot, transobj=None):
+def _make_model(kinematics, transobj=None):
     # state
-    q = ca.SX.sym("q", robot.model.nq)
-    v = ca.SX.sym("v", robot.model.nv)
-    a = ca.SX.sym("a", robot.model.nv)
+    q = ca.SX.sym("q", kinematics.model.nq)
+    v = ca.SX.sym("v", kinematics.model.nv)
+    a = ca.SX.sym("a", kinematics.model.nv)
 
     x = ca.vertcat(q, v, a)
     xdot = ca.SX.sym("xdot", x.size1())
 
     # input
     nf = 0 if transobj is None else len(transobj.contacts)
-    j = ca.SX.sym("j", robot.model.nv)
+    j = ca.SX.sym("j", kinematics.model.nv)
     f = ca.SX.sym("f", nf)
     u = ca.vertcat(j, f)
 
@@ -38,7 +38,7 @@ def _make_model(robot, transobj=None):
     model.x = x
     model.xdot = xdot
     model.u = u
-    model.name = "robot"
+    model.name = "robot_waiter"
     return model
 
 
@@ -49,15 +49,15 @@ def _split_x(x, nq, nv):
     return q, v, a
 
 
-def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
+def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=None):
     ocp = AcadosOcp()
     ocp.model = model
-    ocp.name = "robot_ocp"
+    ocp.name = "robot_waiter_ocp"
     ocp.json_file = "acados/ocp.json"
     ocp.code_export_directory = "acados/c_generated_code_ocp"
 
-    nq = robot.model.nq
-    nv = robot.model.nv
+    nq = kinematics.model.nq
+    nv = kinematics.model.nv
     nx = model.x.rows()
     nu = model.u.rows()
     nf = 0 if transobj is None else len(transobj.contacts)
@@ -82,8 +82,8 @@ def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
 
     # casadi forward kinematics
     q, v, a = _split_x(model.x, nq, nv)
-    robot.forward(q=q, v=v, a=a)
-    r, C = robot.pose()
+    kinematics.forward(q=q, v=v, a=a)
+    r, C = kinematics.pose()
 
     # path cost
     ocp.cost.cost_type = "NONLINEAR_LS"
@@ -98,6 +98,7 @@ def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
     # ocp.cost.W_e = Q
 
     # input and force limits
+    # TODO put as constants somewhere
     j_max = 100
     ocp.constraints.lbu = np.concatenate((-j_max * np.ones(nv), np.zeros(nf)))
     ocp.constraints.ubu = np.concatenate(
@@ -111,7 +112,7 @@ def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
     # ocp.constraints.idxbx = np.array([0, 1, 3, 4])
 
     # aligned constraint
-    # a = robot.classical_acceleration()[0]
+    # a = kinematics.classical_acceleration()[0]
     # z = np.array([0, 0, 1])
     # g = 9.81 * z
     # con = ca.cross(z, a + C @ g)
@@ -136,8 +137,8 @@ def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
         g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -9.81]))
 
         # Newton-Euler equation for rigid body dynamics
-        ξ = ca.vertcat(*robot.spatial_velocity())
-        dξdt = ca.vertcat(*robot.spatial_acceleration())
+        ξ = ca.vertcat(*kinematics.spatial_velocity())
+        dξdt = ca.vertcat(*kinematics.spatial_acceleration())
         h = transobj.params.ne(ξ, dξdt - g) - wc
 
         ocp.model.con_h_expr = h
@@ -173,17 +174,17 @@ def _make_solver(robot, model, horizon, total_steps, q0, goal, transobj=None):
 
 class Planner:
     def __init__(
-        self, robot, horizon, steps_per_second, q0, goal, transobj=None):
+        self, kinematics, horizon, steps_per_second, q0, goal, transobj=None):
         self.horizon = horizon
         self.total_steps = int(horizon * steps_per_second)
         self.dt = 1.0 / steps_per_second
 
-        self.crobot = robot.to_casadi()
-        self.model = _make_model(self.crobot, transobj=transobj)
+        self.kinematics = kinematics.to_casadi()
+        self.model = _make_model(self.kinematics, transobj=transobj)
 
         # TODO it would be nice to break this out
         self.solver = _make_solver(
-            robot=self.crobot,
+            kinematics=self.kinematics,
             model=self.model,
             horizon=self.horizon,
             total_steps=self.total_steps,
@@ -192,13 +193,13 @@ class Planner:
             transobj=transobj,
         )
 
-    def solve(self, verbose=False):
+    def plan(self, verbose=False):
         status = self.solver.solve()
         if verbose:
             self.solver.print_statistics()
         return status
 
-    def update(self):
+    def replan(self, x, verbose=False):
         pass
 
     def get_solution_times(self):
@@ -213,5 +214,5 @@ class Planner:
     def get_solution_spline(self):
         ts = self.get_solution_times()
         xs = self.get_solution_states()
-        qs = xs[:, : self.crobot.model.nq]
+        qs = xs[:, : self.kinematics.model.nq]
         return CubicSpline(ts, qs, axis=0)
