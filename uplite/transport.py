@@ -57,24 +57,15 @@ class InertialParameters:
         return M @ dξdt - V.T @ M @ ξ
 
 
-# class ContactPoint:
-#     def __init__(self, position, mu, normal=(0, 0, 1)):
-#         self.position = np.array(position)
-#         self.normal = np.array(normal) / np.linalg.norm(normal)
-#         self.mu = mu
-#
-#         assert self.mu >= 0, "Friction coefficient must be non-negative."
-
-
 class TransportedObject:
     def __init__(self, params, contacts):
         self.params = params
         self.contacts = contacts
 
-    # TODO: use half extents
     @classmethod
-    def box(cls, params, rx, ry):
+    def box(cls, params, w):
+        r = 0.5 * w
         vertices = np.array(
-            [[rx, ry, 0], [rx, -ry, 0], [-rx, ry, 0], [-rx, -ry, 0]]
+            [[r, r, 0], [r, -r, 0], [-r, r, 0], [-r, -r, 0]]
         )
         return cls(params=params, contacts=vertices)

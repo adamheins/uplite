@@ -47,12 +47,13 @@ class BulletSimulation:
         self.steps += 1
         return self.steps * self.timestep
 
-    def add_transported_box(self, params, mu, rx, ry, color=(1, 0, 0, 1)):
+    def add_transported_box(self, params, mu, w, color=(1, 0, 0, 1)):
         p, R = self.robot.get_link_frame_pose(as_rotation_matrix=True)
 
+        r = 0.5 * w
         rz = params.com[2]
         box = pyb_utils.BulletBody.box(
-            position=p + R @ params.com, half_extents=[rx, ry, rz], color=color
+            position=p + R @ params.com, half_extents=[r, r, rz], color=color
         )
 
         # set friction
