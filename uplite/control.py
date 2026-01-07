@@ -12,6 +12,17 @@ from scipy.interpolate import CubicSpline
 
 from .transport import adjoint, contact_jacobian
 
+JOINT_JERK_LIMIT = 100  # rad/s^3
+JOINT_ACC_LIMIT = 20  # rad/s^2
+JOINT_VEL_LIMIT = np.pi  # rad/s
+JOINT_POS_LIMIT = 2 * np.pi  # rad
+
+GRAVITY = 9.81  # m/s^2
+
+# slack penalties for robust sticking constraint
+ROBUST_L1_SLACK_WEIGHT = 10
+ROBUST_L2_SLACK_WEIGHT = 0
+
 
 def _make_model(kinematics, transobj=None):
     # state
@@ -49,7 +60,16 @@ def _split_x(x, nq, nv):
     return q, v, a
 
 
-def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=None):
+def _make_solver(
+    kinematics,
+    model,
+    horizon,
+    total_steps,
+    q0,
+    goal,
+    upright_constraint="none",
+    transobj=None,
+):
     ocp = AcadosOcp()
     ocp.model = model
     ocp.name = "robot_waiter_ocp"
@@ -73,6 +93,7 @@ def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=Non
     u0 = np.zeros(nu)
 
     # cost matrices
+    # TODO make these constants
     Qr = np.eye(3)
     Qq = 0 * np.eye(nq)
     Qv = 0.1 * np.eye(nv)
@@ -91,50 +112,60 @@ def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=Non
     ocp.cost.yref = np.concatenate((goal, x0, u0))
     ocp.cost.W = ca.diagcat(Q, R).full()
 
-    # terminal cost
-    # ocp.cost.cost_type_e = "NONLINEAR_LS"
-    # ocp.model.cost_y_expr_e = ca.vertcat(r, model.x)
-    # ocp.cost.yref_e = np.concatenate((goal, x0))
-    # ocp.cost.W_e = Q
+    # initial state
+    ocp.constraints.x0 = x0
 
-    # input and force limits
-    # TODO put as constants somewhere
-    j_max = 100
-    ocp.constraints.lbu = np.concatenate((-j_max * np.ones(nv), np.zeros(nf)))
+    # terminal constraint: EE at goal position with zero velocity and
+    # acceleration
+    ocp.model.con_h_expr_e = ca.vertcat(r - goal, model.x[nq:])
+    ocp.constraints.lh_e = np.zeros(3 + 2 * nv)
+    ocp.constraints.uh_e = np.zeros(3 + 2 * nv)
+
+    # input/force limits (normal forces need to be non-negative)
+    ocp.constraints.lbu = np.concatenate(
+        (-JOINT_JERK_LIMIT * np.ones(nv), np.zeros(nf))
+    )
     ocp.constraints.ubu = np.concatenate(
-        (j_max * np.ones(nv), ACADOS_INFTY * np.ones(nf))
+        (JOINT_JERK_LIMIT * np.ones(nv), ACADOS_INFTY * np.ones(nf))
     )
     ocp.constraints.idxbu = np.arange(nu)
 
     # state limits
-    # ocp.constraints.lbx = np.array([-Y_MAX, -Z_MAX, -V_MAX, -V_MAX])
-    # ocp.constraints.ubx = np.array([Y_MAX, Z_MAX, V_MAX, V_MAX])
-    # ocp.constraints.idxbx = np.array([0, 1, 3, 4])
+    x_lim = np.concatenate(
+        (
+            JOINT_POS_LIMIT * np.ones(nq),
+            JOINT_VEL_LIMIT * np.ones(nv),
+            JOINT_ACC_LIMIT * np.ones(nv),
+        )
+    )
+    ocp.constraints.lbx = -x_lim
+    ocp.constraints.ubx = x_lim
+    ocp.constraints.idxbx = np.arange(nx)
 
-    # aligned constraint
-    # a = kinematics.classical_acceleration()[0]
-    # z = np.array([0, 0, 1])
-    # g = 9.81 * z
-    # con = ca.cross(z, a + C @ g)
-    # ocp.model.con_h_expr = con
-    # ocp.constraints.lh = np.zeros(3)
-    # ocp.constraints.uh = np.zeros(3)
-
-    # initial state
-    ocp.constraints.x0 = x0
-
-    # rigid body dynamics sticking constraint
-    if nf > 0:
+    z = np.array([0, 0, 1])  # all normals are assumed to be vertical
+    if upright_constraint == "upward":
+        # keep the tray oriented upward
+        ocp.model.con_h_expr = C @ z - z
+        ocp.constraints.lh = np.zeros(3)
+        ocp.constraints.uh = np.zeros(3)
+    elif upright_constraint == "aligned":
+        # keep total acceleration aligned with tray's normal
+        a = kinematics.classical_acceleration()[0]
+        g = GRAVITY * z
+        ocp.model.con_h_expr = ca.cross(z, a + C @ g)
+        ocp.constraints.lh = np.zeros(3)
+        ocp.constraints.uh = np.zeros(3)
+    elif upright_constraint == "robust":
+        # more robust Newton-Euler constraint with contact forces
         # contact wrench
         wc = np.zeros(6)
         for i in range(nf):
-            # assume all normals are vertical
-            force = model.u[nv + i] * np.array([0, 0, 1])
+            force = model.u[nv + i] * z
             G = contact_jacobian(transobj.contacts[i, :]).T
             wc += G @ force
 
         # spatial gravity in body frame
-        g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -9.81]))
+        g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -GRAVITY]))
 
         # Newton-Euler equation for rigid body dynamics
         ξ = ca.vertcat(*kinematics.spatial_velocity())
@@ -145,20 +176,17 @@ def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=Non
         ocp.constraints.lh = np.zeros(6)
         ocp.constraints.uh = np.zeros(6)
 
-    # TODO: terminal constraint - this does not seem to be working
-    ocp.model.con_h_expr_e = ca.vertcat(r - goal, model.x[nq:])
-    ocp.constraints.lh_e = np.zeros(3 + 2 * nv)
-    ocp.constraints.uh_e = np.zeros(3 + 2 * nv)
-    # ocp.model.con_h_expr_e = goal - r
-    # ocp.constraints.lh_e = np.zeros(3)
-    # ocp.constraints.uh_e = np.zeros(3)
-
-    # ns = 6
-    # ocp.constraints.idxsh = np.arange(ns)
-    # ocp.cost.zl = 1 * np.ones(ns)
-    # ocp.cost.Zl = 0 * np.ones(ns)
-    # ocp.cost.zu = 1 * np.ones(ns)
-    # ocp.cost.Zu = 0 * np.ones(ns)
+        # slack variables to relax the constraint
+        ns = 6
+        ocp.cost.zl = ROBUST_L1_SLACK_WEIGHT * np.ones(ns)
+        ocp.cost.Zl = ROBUST_L2_SLACK_WEIGHT * np.ones(ns)
+        ocp.cost.zu = ROBUST_L1_SLACK_WEIGHT * np.ones(ns)
+        ocp.cost.Zu = ROBUST_L2_SLACK_WEIGHT * np.ones(ns)
+        ocp.constraints.idxsh = np.arange(ns)
+    elif upright_constraint == "none":
+        pass
+    else:
+        raise ValueError(f"Unknown constraint: {upright_constraint}")
 
     # set solver options
     ocp.solver_options.qp_solver = "PARTIAL_CONDENSING_HPIPM"
@@ -174,7 +202,15 @@ def _make_solver(kinematics, model, horizon, total_steps, q0, goal, transobj=Non
 
 class Planner:
     def __init__(
-        self, kinematics, horizon, steps_per_second, q0, goal, transobj=None):
+        self,
+        kinematics,
+        horizon,
+        steps_per_second,
+        q0,
+        goal,
+        transobj=None,
+        upright_constraint="none",
+    ):
         self.horizon = horizon
         self.total_steps = int(horizon * steps_per_second)
         self.dt = 1.0 / steps_per_second
@@ -191,6 +227,7 @@ class Planner:
             q0=q0,
             goal=goal,
             transobj=transobj,
+            upright_constraint=upright_constraint,
         )
 
     def plan(self, verbose=False):
@@ -206,10 +243,14 @@ class Planner:
         return np.arange(self.total_steps + 1) * self.dt
 
     def get_solution_states(self):
-        return np.array([self.solver.get(i, "x") for i in range(self.total_steps + 1)])
+        return np.array(
+            [self.solver.get(i, "x") for i in range(self.total_steps + 1)]
+        )
 
     def get_solution_inputs(self):
-        return np.array([self.solver.get(i, "u") for i in range(self.total_steps)])
+        return np.array(
+            [self.solver.get(i, "u") for i in range(self.total_steps)]
+        )
 
     def get_solution_spline(self):
         ts = self.get_solution_times()

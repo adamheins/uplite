@@ -1,3 +1,4 @@
+import argparse
 import time
 
 import matplotlib.pyplot as plt
@@ -16,18 +17,19 @@ SIM_TIMESTEP = 0.01
 
 # robot URDF
 URDF_PATH = uplite.ASSETS_DIR / "combined.urdf"
+TOOL_LINK_NAME = "tray"
 
 # initial joint configuration
 ROBOT_HOME = np.array([0, -np.pi / 4, np.pi / 2, -np.pi / 4, np.pi / 2, 0])
 
 # EE goal position relative to its initial position
-RELATIVE_TARGET = np.array([-0.5, 0.4, 0])
+RELATIVE_TARGET = np.array([-0.8, 0.8, 0])
 
 # width of the (square) base of the transported box
 BASE_WIDTH = 0.1
 
 # friction coefficient in the simulation
-SIMULATED_FRICTION = 0.5
+SIMULATED_FRICTION = 0.3
 
 # controller gain for joint position error
 P_GAIN = 10
@@ -36,18 +38,31 @@ P_GAIN = 10
 def main():
     np.set_printoptions(precision=4, suppress=True)
 
+    parser = argparse.ArgumentParser(
+        description="Robot waiter planner and simulation"
+    )
+    parser.add_argument(
+        "-c",
+        "--constraint",
+        type=str,
+        default="none",
+        choices=["none", "upward", "aligned", "robust"],
+        help="Type of upright constraint to use in the planner",
+    )
+    args = parser.parse_args()
+
     kinematics = uplite.RobotKinematics.from_urdf_file(
-        urdf_path=URDF_PATH, tool_link_name="tray"
+        urdf_path=URDF_PATH, tool_link_name=TOOL_LINK_NAME
     )
 
     # add a transported object
     params = uplite.InertialParameters(
         mass=1.0,
-        com=[0, 0, 0.1],
+        com=[0, 0, 0.2],
         inertia=np.diag([0.01, 0.01, 0.01]),
         inertia_about_com=True,
     )
-    box = uplite.TransportedObject.box(params=params, w=BASE_WIDTH)
+    transobj = uplite.TransportedObject.box(params=params, w=BASE_WIDTH)
 
     # plan trajectory
     kinematics.forward(q=ROBOT_HOME)
@@ -59,7 +74,8 @@ def main():
         steps_per_second=STEPS_PER_SECOND,
         q0=ROBOT_HOME,
         goal=goal,
-        transobj=box,
+        transobj=transobj,
+        upright_constraint=args.constraint,
     )
     status = planner.plan(verbose=True)
     if status != 0:
@@ -70,14 +86,15 @@ def main():
     # now simulate it
     sim = uplite.BulletSimulation(
         urdf_path=URDF_PATH,
-        tool_link_name="tray",
+        tool_link_name=TOOL_LINK_NAME,
         timestep=SIM_TIMESTEP,
         q0=ROBOT_HOME,
     )
-    sim.add_transported_box(params=params, mu=SIMULATED_FRICTION, w=BASE_WIDTH)
+    box = sim.add_transported_box(params=params, mu=SIMULATED_FRICTION, w=BASE_WIDTH)
 
     ts = []
     rs = []
+    Qs = []
     qds = []
     vds = []
     qs = []
@@ -94,9 +111,14 @@ def main():
         sim.robot.command_velocity(v_cmd)
 
         # record
-        r = sim.robot.get_link_frame_pose()[0]
+        r, Q = sim.robot.get_link_frame_pose()
+
+        # TODO need to compute and plot object error
+        ro = box.get_pose()[0]
+
         ts.append(t)
         rs.append(r)
+        Qs.append(Q)
         qds.append(qd)
         vds.append(vd)
         qs.append(q)
@@ -107,6 +129,7 @@ def main():
 
     ts = np.array(ts)
     rs = np.array(rs)
+    Qs = np.array(Qs)
     qds = np.array(qds)
     vds = np.array(vds)
     qs = np.array(qs)
@@ -126,6 +149,17 @@ def main():
     plt.xlabel("Time [s]")
     plt.ylabel("Position error [m]")
     plt.title("Position error")
+    plt.grid()
+    plt.legend()
+
+    plt.figure()
+    plt.plot(ts, Qs[:, 0], label="x")
+    plt.plot(ts, Qs[:, 1], label="y")
+    plt.plot(ts, Qs[:, 2], label="z")
+    plt.plot(ts, Qs[:, 3], label="w")
+    plt.xlabel("Time [s]")
+    plt.ylabel("Orientation quaternion")
+    plt.title("Orientation")
     plt.grid()
     plt.legend()
 

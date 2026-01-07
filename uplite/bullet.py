@@ -59,7 +59,7 @@ class BulletSimulation:
         # set friction
         pyb.changeDynamics(box.uid, -1, lateralFriction=mu)
 
-        # set inertia
+        # set mass and inertia
         # TODO need parallel axis theorem (add to params class)
 
         return box
