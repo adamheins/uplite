@@ -1,3 +1,16 @@
+<p align="center">
+<img src="https://static.adamheins.com/upright/uplite.svg" alt="Lightweight robot waiter." width="15%"/>
+</p>
+
+Uplite is a modern and lightweight implementation of the core ideas from [this
+paper](https://arxiv.org/abs/2305.17484) for solving the robot waiter problem.
+Compared to the [original
+implementation](https://github.com/utiasDSL/upright/), uplite:
+* does not use ROS;
+* is only written in Python;
+* is simulation-only;
+
+TODO
 
 ## Install
 
