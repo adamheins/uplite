@@ -15,6 +15,8 @@ implementation](https://github.com/utiasDSL/upright/), uplite currently:
 * does not implement obstacle avoidance;
 * generates and tracks an offline plan rather than online MPC;
 * does not include full (naive) friction constraints;
+* uses [acados](https://docs.acados.org/) for nonlinear trajectory
+  optimization;
 * is **vastly easier** to set up, install, and modify.
 
 This lack of extra features allows the codebase to remain a simple starting
@@ -32,8 +34,7 @@ git clone https://github.com/adamheins/uplite ~/uplite
 cd ~/uplite
 pixi install
 ```
-Unfortunately, there is no conda package for
-[acados](https://docs.acados.org/), so it must be installed
+Unfortunately, there is no conda package for acados, so it must be installed
 manually:
 ```sh
 # see also <https://docs.acados.org/installation/index.html>

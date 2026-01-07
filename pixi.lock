@@ -2604,7 +2604,7 @@ packages:
 - pypi: ./
   name: uplite
   version: 0.1.0
-  sha256: 58b146b30e4c67106a2d501e90482234103722801f0b6a51f9d0f8dc37b8ce5e
+  sha256: 481a168b549d6531b2c43fee406e14735b340cb70791a4274547a68586408382
   requires_dist:
   - pybullet>=3.2.7,<4
   - pyb-utils>=2.4.2,<3
