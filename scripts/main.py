@@ -17,7 +17,7 @@ TOTAL_STEPS = STEPS_PER_SECOND * HORIZON
 SIM_TIMESTEP = 0.01
 
 # robot URDF
-URDF_PATH = uplite.ASSETS_DIR / "combined.urdf"
+URDF_PATH = uplite.ASSETS_DIR / "waiter.urdf"
 TOOL_LINK_NAME = "tray"
 
 # initial joint configuration
@@ -74,7 +74,7 @@ def main():
         q0=ROBOT_HOME,
         goal=goal,
         transobj=transobj,
-        upright_constraint=args.constraint,
+        constraint_type=args.constraint,
     )
     status = planner.plan(verbose=True)
     if status != 0:

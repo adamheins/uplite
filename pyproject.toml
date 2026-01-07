@@ -1,9 +1,12 @@
 [project]
-authors = [{name = "Adam Heins", email = "mail@adamheins.com"}]
-dependencies = ["pybullet>=3.2.7,<4", "pyb-utils>=2.4.2,<3"]
 name = "uplite"
-requires-python = ">= 3.11"
 version = "0.1.0"
+description = "Lightweight trajectory optimization for the robot waiter problem."
+authors = [{name = "Adam Heins", email = "mail@adamheins.com"}]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">= 3.11"
+dependencies = ["pybullet>=3.2.7,<4", "pyb-utils>=2.4.2,<3"]
 
 [build-system]
 build-backend = "hatchling.build"
