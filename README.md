@@ -9,7 +9,7 @@ implementation](https://github.com/utiasDSL/upright/), uplite currently:
 * does not use ROS;
 * is written in Python only (underlying libraries of course use C/C++, but the
   user doesn't have to);
-* is simulation-only;
+* is simulation-only (using PyBullet);
 * uses a fixed-base arm rather than a mobile manipulator;
 * only supports a single transported object (a box);
 * does not implement obstacle avoidance;
