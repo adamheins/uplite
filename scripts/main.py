@@ -3,6 +3,7 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyb_utils
 
 import uplite
 
@@ -56,11 +57,9 @@ def main():
     )
 
     # add a transported object
-    params = uplite.InertialParameters(
-        mass=1.0,
-        com=[0, 0, 0.2],
-        inertia=np.diag([0.01, 0.01, 0.01]),
-        inertia_about_com=True,
+    half_extents = np.array([0.5 * BASE_WIDTH, 0.5 * BASE_WIDTH, 0.2])
+    params = uplite.InertialParameters.uniform_density_box(
+        mass=1.0, com=[0, 0, half_extents[2]], half_extents=half_extents
     )
     transobj = uplite.TransportedObject.box(params=params, w=BASE_WIDTH)
 
@@ -90,7 +89,9 @@ def main():
         timestep=SIM_TIMESTEP,
         q0=ROBOT_HOME,
     )
-    box = sim.add_transported_box(params=params, mu=SIMULATED_FRICTION, w=BASE_WIDTH)
+    box = sim.add_transported_box(
+        params=params, mu=SIMULATED_FRICTION, w=BASE_WIDTH
+    )
 
     ts = []
     rs = []
@@ -99,6 +100,7 @@ def main():
     vds = []
     qs = []
     vs = []
+    r_errs = []
 
     t = 0
     while t < HORIZON:
@@ -112,9 +114,10 @@ def main():
 
         # record
         r, Q = sim.robot.get_link_frame_pose()
+        C = pyb_utils.quaternion_to_matrix(Q)
 
-        # TODO need to compute and plot object error
         ro = box.get_pose()[0]
+        r_err = C.T @ (ro - r)  # object position in tray frame
 
         ts.append(t)
         rs.append(r)
@@ -123,6 +126,7 @@ def main():
         vds.append(vd)
         qs.append(q)
         vs.append(v)
+        r_errs.append(r_err)
 
         t = sim.step()
         time.sleep(sim.timestep)
@@ -135,6 +139,11 @@ def main():
     qs = np.array(qs)
     vs = np.array(vs)
 
+    # object error is how much is moves relative to initial position
+    r_errs = np.array(r_errs)
+    r_errs -= r_errs[0, :]
+
+    # knot points
     t_sols = planner.get_solution_times()
     u_sols = planner.get_solution_inputs()
     x_sols = planner.get_solution_states()
@@ -145,7 +154,7 @@ def main():
     plt.figure()
     plt.plot(ts, goal[0] - rs[:, 0], label="x")
     plt.plot(ts, goal[1] - rs[:, 1], label="y")
-    plt.plot(ts, goal[2] - rs[:, 2] + 1, label="z")
+    plt.plot(ts, goal[2] - rs[:, 2], label="z")
     plt.xlabel("Time [s]")
     plt.ylabel("Position error [m]")
     plt.title("Position error")
@@ -207,6 +216,13 @@ def main():
     plt.title("Joint input jerk")
     plt.grid()
     plt.legend()
+
+    plt.figure()
+    plt.plot(ts, 1000 * np.linalg.norm(r_errs, axis=1))
+    plt.xlabel("Time [s]")
+    plt.ylabel("Distance [mm]")
+    plt.title("Object error")
+    plt.grid()
 
     plt.show()
 

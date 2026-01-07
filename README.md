@@ -7,19 +7,20 @@ paper](https://arxiv.org/abs/2305.17484) (see full citation below) for solving
 the robot waiter problem. Compared to the [original
 implementation](https://github.com/utiasDSL/upright/), uplite currently:
 * does not use ROS;
-* is only written in Python;
+* is written in Python only (underlying libraries of course use C/C++, but the
+  user doesn't have to);
 * is simulation-only;
 * uses a fixed-base arm rather than a mobile manipulator;
 * only supports a single transported object (a box);
 * does not implement obstacle avoidance;
 * generates and tracks an offline plan rather than online MPC;
 * does not include full (naive) friction constraints;
-* is **vastly easier** to set up and install.
+* is **vastly easier** to set up, install, and modify.
 
 This lack of extra features allows the codebase to remain a simple starting
-point for those wishing to demonstrate or research the waiter's problem.
-However, the code should also be easy to modify to add features and extend for
-your use-case.
+point for those wishing to work on or play with the waiter's problem. However,
+the code should also be easy to modify to add features and extend for your
+use-case.
 
 ## Install
 
@@ -48,7 +49,7 @@ make install -j4
 # once acados is built, install the Python interface into your uplite pixi
 # workspace
 cd ~/uplite
-pixi run pip install -e <path_to_acados>/interfaces/acados_template
+pixi run pip install -e ~/acados/interfaces/acados_template
 ```
 
 ## Usage
@@ -64,6 +65,16 @@ pixi run scripts/main.py -c robust
 This example is currently set up to fail (i.e., the box is dropped) with all
 constraint types except for `robust`. Feel free to change the values of the
 constants at the top of the script to obtain different behaviours.
+
+The constraint types `none`, `upward`, and `robust` correspond to those
+described in the original paper. The `full` constraints are not currently
+implemented. The `aligned` constraints (which simply force the tray's normal to
+be aligned with the total acceleration vector) were not included in the
+original paper but are described in Section 4.8.3 of
+[my thesis](https://static.adamheins.com/thesis.pdf).
+
+To modify additional parameters of the trajectory optimization problem, edit
+the file `uplite/planner.py`.
 
 ## Citation
 
