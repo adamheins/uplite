@@ -56,12 +56,12 @@ pixi run pip install -e ~/acados/interfaces/acados_template
 ## Usage
 
 A PyBullet simulation of a fixed-based arm moving a box on a tray is provided
-in `scripts/main.py`. The constraint type can be passed as a command line
+in `examples/main.py`. The constraint type can be passed as a command line
 argument using the `-c` or `--constraint` option; e.g.,
 ```
 # use the 'robust' constraint proposed in the paper
 # other possible constraint types are 'none', 'upward', and 'aligned'
-pixi run scripts/main.py -c robust
+pixi run examples/main.py -c robust
 ```
 This example is currently set up to fail (i.e., the box is dropped) with all
 constraint types except for `robust`. Feel free to change the values of the
