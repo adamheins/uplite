@@ -63,7 +63,7 @@ argument using the `-c` or `--constraint` option; e.g.,
 ```
 # use the 'robust' constraint proposed in the paper
 # other possible constraint types are 'none', 'upward', and 'aligned'
-pixi run examples/main.py -c robust
+pixi run python examples/main.py -c robust
 ```
 This example is currently set up to fail (i.e., the box is dropped) with all
 constraint types except for `robust`. Feel free to change the values of the
