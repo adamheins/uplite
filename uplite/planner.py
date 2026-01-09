@@ -17,14 +17,22 @@ JOINT_ACC_COST = 0.01
 JOINT_JERK_COST = 0.001
 CONTACT_FORCE_COST = 0.001
 
-GRAVITY = 9.81  # m/s^2
+GRAVITY = -9.81  # m/s^2
 
 # slack penalties for robust sticking constraint
 ROBUST_L1_SLACK_WEIGHT = 10
 ROBUST_L2_SLACK_WEIGHT = 0
 
 
-def _make_model(kinematics, transobj=None):
+def _split_x(x, nq, nv):
+    """Split the state vector into its component parts."""
+    q = x[:nq]
+    v = x[nq : nq + nv]
+    a = x[nq + nv :]
+    return q, v, a
+
+
+def _waiter_model(kinematics, transobj=None):
     """Make the acados model for the robot waiter dynamics.
 
     Parameters
@@ -68,17 +76,9 @@ def _make_model(kinematics, transobj=None):
     return model
 
 
-def _split_x(x, nq, nv):
-    """Split the state vector into its component parts."""
-    q = x[:nq]
-    v = x[nq : nq + nv]
-    a = x[nq + nv :]
-    return q, v, a
-
-
 # NOTE: this is where the trajectory optimization problem is defined: modify
 # for your needs
-def _make_solver(
+def _waiter_ocp(
     kinematics,
     model,
     horizon,
@@ -88,7 +88,8 @@ def _make_solver(
     constraint_type="none",
     transobj=None,
 ):
-    """Make the acados solver for the robot waiter trajectory optimization problem.
+    """Make the acados optimal control problem for the robot waiter trajectory
+    optimization problem.
 
     Parameters
     ----------
@@ -198,8 +199,8 @@ def _make_solver(
     elif constraint_type == "aligned":
         # keep total acceleration aligned with tray's normal
         a = kinematics.classical_acceleration()[0]
-        g = GRAVITY * z
-        ocp.model.con_h_expr = ca.cross(z, a + C @ g)
+        g = -GRAVITY * z
+        ocp.model.con_h_expr = ca.cross(z, a - C @ g)
         ocp.constraints.lh = np.zeros(3)
         ocp.constraints.uh = np.zeros(3)
     elif constraint_type == "robust":
@@ -212,7 +213,7 @@ def _make_solver(
             wc += G @ force
 
         # spatial gravity in body frame
-        g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, -GRAVITY]))
+        g = ca.vertcat(np.zeros(3), C.T @ np.array([0, 0, GRAVITY]))
 
         # Newton-Euler equation for rigid body dynamics
         ξ = ca.vertcat(*kinematics.spatial_velocity())
@@ -244,7 +245,8 @@ def _make_solver(
     ocp.solver_options.nlp_solver_max_iter = 1000
     ocp.solver_options.qp_solver_iter_max = 1000
 
-    return at.AcadosOcpSolver(ocp)
+    return ocp
+
 
 
 class Planner:
@@ -284,18 +286,19 @@ class Planner:
         self.dt = 1.0 / steps_per_second
 
         self.kinematics = kinematics.to_casadi()
-        self.model = _make_model(self.kinematics, transobj=transobj)
+        self.model = _waiter_model(self.kinematics, transobj=transobj)
 
-        self.solver = _make_solver(
+        ocp = _waiter_ocp(
             kinematics=self.kinematics,
             model=self.model,
             horizon=self.horizon,
             total_steps=self.total_steps,
             q0=q0,
             goal=goal,
-            transobj=transobj,
             constraint_type=constraint_type,
+            transobj=transobj,
         )
+        self.solver = at.AcadosOcpSolver(ocp)
 
     def plan(self, verbose=False):
         """Plan the trajectory.
@@ -315,9 +318,10 @@ class Planner:
             self.solver.print_statistics()
         return status
 
-    # TODO: possible API for online replanning/MPC using RTI
-    def replan(self, x, verbose=False):
-        pass
+    # TODO: possible API for online replanning/MPC using RTI, hidden for now
+    def replan(self, x):
+        raise NotImplementedError("Replanning not currently implemented.")
+        return self.solver.solve_for_x0(x0_bar=x)
 
     def get_solution_times(self):
         """Get the times at the solution knot points."""
@@ -335,9 +339,23 @@ class Planner:
             [self.solver.get(i, "u") for i in range(self.total_steps)]
         )
 
-    def get_solution_spline(self):
-        """Get a spline representing the optimal joint position trajectory."""
+    def get_solution_spline(self, bc_type="natural"):
+        """Get a spline representing the optimal joint position trajectory.
+
+        Parameters
+        ----------
+        bc_type : str or 2-tuple, optional
+            Boundary condition type for the spline, by default "natural"; see
+            https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.CubicSpline.html
+
+        Returns
+        -------
+        : CubicSpline
+            The cubic spline representing the joint position trajectory. Use
+            the ``derivative`` method to get trajectories of higher
+            derivatives.
+        """
         ts = self.get_solution_times()
         xs = self.get_solution_states()
         qs = xs[:, : self.kinematics.model.nq]
-        return CubicSpline(ts, qs, axis=0)
+        return CubicSpline(ts, qs, axis=0, bc_type=bc_type)

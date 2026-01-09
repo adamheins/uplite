@@ -14,12 +14,13 @@ implementation](https://github.com/utiasDSL/upright/), uplite currently:
 * only supports a single transported object (a box);
 * does not implement obstacle avoidance;
 * generates and tracks an offline plan rather than online MPC;
-* does not include full (naive) friction constraints;
+* implements the proposed `robust` sticking constraints while omitting `full`
+  (naive) sticking constraints;
 * uses [acados](https://docs.acados.org/) for nonlinear trajectory
   optimization;
 * is **vastly easier** to set up, install, and modify.
 
-This lack of extra features allows the codebase to remain a simple starting
+This smaller set of features allows the codebase to remain a simple starting
 point for those wishing to work on or play with the waiter's problem. However,
 the code should also be easy to modify to add features and extend for your
 use-case.
