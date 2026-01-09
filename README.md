@@ -3,8 +3,9 @@
 </p>
 
 Uplite is a modern and lightweight implementation of the core ideas from [this
-paper](https://arxiv.org/abs/2305.17484) (see full citation below) for solving
-the robot waiter problem. Compared to the [original
+paper](https://arxiv.org/abs/2305.17484) (see full citation below) for
+nonprehensile object transportation (also known as the robot waiter problem).
+Compared to the [original
 implementation](https://github.com/utiasDSL/upright/), uplite currently:
 * does not use ROS;
 * is written in Python only (underlying libraries of course use C/C++, but the
