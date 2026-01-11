@@ -197,12 +197,13 @@ def _waiter_ocp(
         ocp.constraints.lh = np.zeros(3)
         ocp.constraints.uh = np.zeros(3)
     elif constraint_type == "aligned":
-        # keep total acceleration aligned with tray's normal
-        a = kinematics.classical_acceleration()[0]
-        g = -GRAVITY * z
-        ocp.model.con_h_expr = ca.cross(z, a - C @ g)
-        ocp.constraints.lh = np.zeros(3)
-        ocp.constraints.uh = np.zeros(3)
+        # keep total acceleration pointing along the tray's normal
+        a = kinematics.classical_acceleration()[1]
+        g = GRAVITY * z
+        f = a - C.T @ g
+        ocp.model.con_h_expr = ca.vertcat(ca.cross(z, f), ca.dot(z, f))
+        ocp.constraints.lh = np.zeros(4)
+        ocp.constraints.uh = np.array([0, 0, 0, at.ACADOS_INFTY])
     elif constraint_type == "robust":
         # more robust Newton-Euler constraint with contact forces
         # contact wrench
@@ -246,7 +247,6 @@ def _waiter_ocp(
     ocp.solver_options.qp_solver_iter_max = 1000
 
     return ocp
-
 
 
 class Planner:

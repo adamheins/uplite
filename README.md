@@ -65,16 +65,17 @@ argument using the `-c` or `--constraint` option; e.g.,
 # other possible constraint types are 'none', 'upward', and 'aligned'
 pixi run python examples/main.py -c robust
 ```
-This example is currently set up to fail (i.e., the box is dropped) with all
-constraint types except for `robust`. Feel free to change the values of the
-constants at the top of the script to obtain different behaviours.
+This example is currently set up to fail (i.e., the box is dropped) with the
+`none` and `upward` constraint types while succeeding with the `aligned` and
+`robust` constraint types. Feel free to change the values of the constants at
+the top of the script to obtain different behaviours.
 
 The constraint types `none`, `upward`, and `robust` correspond to those
 described in the [original paper](https://arxiv.org/abs/2305.17484). The `full`
-constraints are not currently implemented. The `aligned` constraints (which
-simply force the tray's normal to be aligned with the total acceleration
-vector) were not included in the original paper but are described in Section
-4.8.3 of [my thesis](https://static.adamheins.com/thesis.pdf).
+constraints from the paper are not currently implemented. The `aligned`
+constraints (which simply force the tray's normal to be aligned with the total
+acceleration vector) were not included in the original paper but are described
+in Section 4.8.3 of [my thesis](https://static.adamheins.com/thesis.pdf).
 
 To modify additional parameters of the trajectory optimization problem, edit
 the file `uplite/planner.py`.
